@@ -82,7 +82,7 @@ func main() {
 	}
 
 	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON(b, gmail.GmailReadonlyScope)
+	config, err := google.ConfigFromJSON(b, gmail.MailGoogleComScope)
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
@@ -103,8 +103,10 @@ func main() {
 	var keepLastLabels []*gmail.Label
 	var keepDaysLabels []*gmail.Label
 
+	// Messages to be deleted
 	var deletionMessageIds []string
 
+	// Extract Labels
 	for _, l := range r.Labels {
 		if strings.HasPrefix(l.Name, "ManagedLabels/Keep") {
 			fmt.Printf("- %s\n", l.Name)
@@ -117,19 +119,13 @@ func main() {
 		}
 	}
 
-	for _, l := range keepLastLabels {
+	for _, label := range keepLastLabels {
 
-		instances, err := strconv.Atoi(strings.TrimPrefix(l.Name, "ManagedLabels/KeepLast"))
+		var messageHeaders []*MessageHeader
+		fmt.Printf("Label:%v\r\n", label.Name)
 
-		resp, err := srv.Users.Messages.List(user).LabelIds(l.Id).Do()
-
-		if err != nil {
-			log.Fatalf("Error listing labels: %v", err)
-		}
-
-		fmt.Printf("Label:%v", l)
-
-		messageHeaders := GetMessageHeaders(srv, resp.Messages)
+		instances, _ := strconv.Atoi(strings.TrimPrefix(label.Name, "ManagedLabels/KeepLast"))
+		messageHeaders = GetLabelMessages(srv, user, label)
 
 		// Sort Descending
 		sort.SliceStable(messageHeaders, func(i, j int) bool {
@@ -149,36 +145,71 @@ func main() {
 			keepLastMap[mh.From] = val
 			if val > instances {
 				deletionMessageIds = append(deletionMessageIds, mh.Id)
-				fmt.Printf("%v", mh)
+				fmt.Printf("- %v\r\n", mh)
 			}
 
 		}
-
-		fmt.Printf("%v", keepLastMap)
 	}
 
-	for _, l := range keepDaysLabels {
+	for _, label := range keepDaysLabels {
 
-		days := strings.TrimPrefix(l.Name,"ManagedLabels/KeepDays")
-		fmt.Printf("older_than:%sd", days)
-		resp, err := srv.Users.Messages.List(user).LabelIds(l.Id).Q(fmt.Sprintf("older_than:%sd", days)).Do()
-		if err != nil {
-			log.Fatalf("Error listing labels: %v", err)
-		}
+		fmt.Printf("Label:%v\r\n", label.Name)
 
-		messageHeaders := GetMessageHeaders(srv, resp.Messages)
+		days, _ := strconv.Atoi(strings.TrimPrefix(label.Name, "ManagedLabels/KeepDays"))
+		cutoffTime := time.Now().Add(time.Duration(-days) * time.Hour * 24)
+
+		var messageHeaders []*MessageHeader
+
+		fmt.Printf("- older_than:%v\r\n", cutoffTime)
+		messageHeaders = GetLabelMessages(srv, user, label)
+
 		for _, mh := range messageHeaders {
-			fmt.Printf("- %v\r\n", mh )
+
+			if mh.Time.Before(cutoffTime) {
+				fmt.Printf("- %v\r\n", mh)
+				deletionMessageIds = append(deletionMessageIds, mh.Id)
+			}
+		}
+	}
+	fmt.Printf("%v\r\n", deletionMessageIds)
+
+	for _, messageId := range deletionMessageIds {
+		fmt.Printf("- deleting %v\r\n", messageId)
+		err = srv.Users.Messages.Delete(user, messageId).Do()
+		if err != nil {
+			fmt.Println(err)
 		}
 	}
 
 }
 
-func GetMessageHeaders(srv *gmail.Service, messages []*gmail.Message) []*MessageHeader {
+func GetLabelMessages(srv *gmail.Service, user string, l *gmail.Label) []*MessageHeader {
+
+	var messageHeaders []*MessageHeader
+
+	resp, err := srv.Users.Messages.List(user).LabelIds(l.Id).Do()
+	if err != nil {
+		log.Fatalf("Error listing labels: %v", err)
+	}
+	messageHeaders = append(messageHeaders, GetMessageHeaders(srv, user, resp.Messages)...)
+	for resp.NextPageToken != "" {
+		resp, err = srv.Users.Messages.List(user).LabelIds(l.Id).PageToken(resp.NextPageToken).Do()
+		messageHeaders = append(messageHeaders, GetMessageHeaders(srv, user, resp.Messages)...)
+		if err != nil {
+			log.Fatalf("Error listing labels: %v", err)
+		}
+	}
+
+	fmt.Printf("- %v messages\r\n", len(messageHeaders))
+
+	return messageHeaders
+}
+
+func GetMessageHeaders(srv *gmail.Service, user string, messages []*gmail.Message) []*MessageHeader {
 	var result []*MessageHeader
 
-	for _,message := range messages {
-		messageHeader, err := GetMessageHeader(srv, message.Id)
+	for _, message := range messages {
+		messageHeader, err := GetMessageHeader(srv, user, message.Id)
 
 		if err != nil {
 			// error getting message
@@ -191,16 +222,18 @@ func GetMessageHeaders(srv *gmail.Service, messages []*gmail.Message) []*Message
 	return result
 }
 
-func GetMessageHeader(srv *gmail.Service, messageId string) (*MessageHeader,error) {
-	resp, err := srv.Users.Messages.Get("me", messageId).Do()
+func GetMessageHeader(srv *gmail.Service, user string, messageId string) (*MessageHeader, error) {
+	resp, err := srv.Users.Messages.Get(user, messageId).Do()
 
 	t := time.Unix(resp.InternalDate/1000, 0)
 
+	const headerSubject = "Subject"
+	const headerFrom = "From"
 	mh := MessageHeader{
-		Subject: GetHeaderValue(resp.Payload.Headers, "Subject"), // Subject: Inflation: Persistently Transitory | Investing Insights Weekly
-		From: GetHeaderValue(resp.Payload.Headers, "From"),
-		Id: messageId,
-		Time: t,
+		Subject: GetHeaderValue(resp.Payload.Headers, headerSubject), // Subject: Inflation: Persistently Transitory | Investing Insights Weekly
+		From:    GetHeaderValue(resp.Payload.Headers, headerFrom),
+		Id:      messageId,
+		Time:    t,
 	}
 	return &mh, err
 }
@@ -213,12 +246,3 @@ func GetHeaderValue(headers []*gmail.MessagePartHeader, name string) string {
 	}
 	return ""
 }
-
-type MessageHeader struct {
-	Id string
-	Subject string
-	From string
-	Time time.Time
-	MessageId string
-}
-
