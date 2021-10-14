@@ -1,0 +1,14 @@
+# Mailbox Manager
+
+## Purpose
+
+Emulate some neat Outlook email features that gmail sorely lacks
+- Keep Last 'n'
+- Retention 'n' Days
+
+## How It Works
+Create custom labels, then create filters to apply labels
+- ManagedLabels/KeepDaysX
+- ManagedLabels/KeepLastX
+
+Run the code...
