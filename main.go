@@ -57,27 +57,44 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+        err := f.Close()
+        if err != nil {
+
+        }
+    }(f)
 	tok := &oauth2.Token{}
 	err = json.NewDecoder(f).Decode(tok)
 	return tok, err
 }
 
 // Saves a token to a file path.
-func saveToken(path string, token *oauth2.Token) {
+func saveToken(path string, token *oauth2.Token) bool {
+
+	var err error
+
 	fmt.Printf("Saving credential file to: %s\n", path)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		log.Fatalf("Unable to cache oauth token: %v", err)
 	}
-	defer f.Close()
-	json.NewEncoder(f).Encode(token)
+	defer func(f *os.File) {
+        err := f.Close()
+        if err != nil {
+        }
+    }(f)
+	err = json.NewEncoder(f).Encode(token)
+    if err != nil {
+        return false
+    }
+	return true
 }
 
 func main() {
 	ctx := context.Background()
 	b, err := ioutil.ReadFile("secrets/credentials.json")
 	if err != nil {
+		// secret file from google needed in ./secrets/credentials.json
 		log.Fatalf("Unable to read client secret file: %v", err)
 	}
 
@@ -245,4 +262,17 @@ func GetHeaderValue(headers []*gmail.MessagePartHeader, name string) string {
 		}
 	}
 	return ""
+}
+
+type MessageHeader struct {
+	Id        string
+	Subject   string
+	From      string
+	Time      time.Time
+	MessageId string
+}
+
+// converting the struct to String format.
+func (mh MessageHeader) String() string {
+	return fmt.Sprintf(mh.Id, mh.Time)
 }
