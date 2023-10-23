@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -58,11 +57,11 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 		return nil, err
 	}
 	defer func(f *os.File) {
-        err := f.Close()
-        if err != nil {
+		err := f.Close()
+		if err != nil {
 
-        }
-    }(f)
+		}
+	}(f)
 	tok := &oauth2.Token{}
 	err = json.NewDecoder(f).Decode(tok)
 	return tok, err
@@ -79,20 +78,20 @@ func saveToken(path string, token *oauth2.Token) bool {
 		log.Fatalf("Unable to cache oauth token: %v", err)
 	}
 	defer func(f *os.File) {
-        err := f.Close()
-        if err != nil {
-        }
-    }(f)
+		err := f.Close()
+		if err != nil {
+		}
+	}(f)
 	err = json.NewEncoder(f).Encode(token)
-    if err != nil {
-        return false
-    }
+	if err != nil {
+		return false
+	}
 	return true
 }
 
 func main() {
 	ctx := context.Background()
-	b, err := ioutil.ReadFile("secrets/credentials.json")
+	b, err := os.ReadFile("secrets/credentials.json")
 	if err != nil {
 		// secret file from google needed in ./secrets/credentials.json
 		log.Fatalf("Unable to read client secret file: %v", err)
@@ -190,9 +189,12 @@ func main() {
 	}
 	fmt.Printf("%v\r\n", deletionMessageIds)
 
-	for _, messageId := range deletionMessageIds {
-		fmt.Printf("- deleting %v\r\n", messageId)
-		err = srv.Users.Messages.Delete(user, messageId).Do()
+	for _, messageIds := range batchSlice(deletionMessageIds, 20) {
+		fmt.Printf("- deleting %v messages\r\n", len(messageIds))
+
+		batchReq := gmail.BatchDeleteMessagesRequest{Ids: messageIds}
+
+		err = srv.Users.Messages.BatchDelete(user, &batchReq).Do()
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -275,4 +277,22 @@ type MessageHeader struct {
 // converting the struct to String format.
 func (mh MessageHeader) String() string {
 	return fmt.Sprintf(mh.Id, mh.Time)
+}
+
+func batchSlice[T any](in []T, size int) (out [][]T) {
+	out = make([][]T, 0)
+
+	if size == 0 {
+		panic("slice batch size is 0")
+	}
+
+	for i := 0; i < len(in); i = i + size {
+		j := i + size
+		if j > len(in) {
+			j = len(in)
+		}
+		out = append(out, in[i:j])
+	}
+
+	return
 }
